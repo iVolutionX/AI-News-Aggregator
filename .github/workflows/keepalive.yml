@@ -1,0 +1,66 @@
+# Keeps the repository "active" so GitHub does not disable the scheduled
+# workflows. GitHub switches off cron triggers on public repos after 60 days
+# with no commits — workflow runs alone do not count as activity. This job
+# pushes a throwaway timestamp once a month, which resets that clock.
+#
+# This is what silently stopped daily-discovery.yml between 2026-06-23 and
+# 2026-08-02: the pipeline itself never broke, the schedule just stopped firing.
+name: Keepalive
+
+on:
+  schedule:
+    # 03:00 UTC on the 1st of every month — roughly half the 60-day limit,
+    # so a single skipped run still leaves plenty of margin.
+    - cron: '0 3 1 * *'
+
+  # Allow manual trigger, useful for verifying the push works
+  workflow_dispatch:
+
+# Prevent overlapping runs
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  touch-repository:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    permissions:
+      # Required to push the timestamp commit back to main
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Write timestamp
+        run: |
+          echo "Last keepalive: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" > .github/keepalive.txt
+
+      - name: Commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Stage only the timestamp file so nothing else is ever swept in
+          git add .github/keepalive.txt
+
+          if git diff --staged --quiet; then
+            echo "No change to commit — skipping push."
+            exit 0
+          fi
+
+          git commit -m "chore: keepalive timestamp [skip ci]"
+          git push
+
+      - name: Workflow Summary
+        if: always()
+        run: |
+          echo "### Keepalive 🫀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Execution Time:** $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Scheduled-workflow inactivity clock reset." >> $GITHUB_STEP_SUMMARY
